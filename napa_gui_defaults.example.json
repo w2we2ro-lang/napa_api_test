@@ -1,0 +1,6 @@
+{
+  "base_url": "https://api.fleetintelligence.napa.fi/vo",
+  "swagger_url": "https://api.fleetintelligence.napa.fi/vo/v1/swagger.json",
+  "timeout": "60",
+  "api_key": ""
+}
