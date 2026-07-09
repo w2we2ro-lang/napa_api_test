@@ -65,11 +65,16 @@ BATCH_RETRY_DELAY_SECONDS = 15
 BATCH_ENDPOINTS = {
     "Find shortest voyage": "/v1/find-shortest-voyage",
     "Find optimal voyage": "/v1/find-optimal-voyage",
+    "Calculate voyage plan": "/v2/calculate-voyage-plan",
 }
 BATCH_OUTPUT_KINDS = {
     "Find shortest voyage": "FindShortestVoyage",
     "Find optimal voyage": "FindOptimalVoyage",
+    "Calculate voyage plan": "CalculateVoyagePlan",
 }
+CALCULATE_VOYAGE_BATCH_ENDPOINT = "Calculate voyage plan"
+CALCULATE_VOYAGE_OPERATION_PROFILE = "OptimalSpeed"
+CALCULATE_VOYAGE_MAX_INTERVAL_DISTANCE_METERS = 50 * 1852
 DEFAULT_BATCH_ROOT = Path.home() / "Downloads"
 RTZ_FILE_NAME_RE = re.compile(
     r"^(?P<imo>\d+)_SAS_(?P<kind>.+)_(?P<date>\d{8})_(?P<time>\d{6})\.rtz$",
@@ -442,6 +447,8 @@ def fallback_endpoints() -> List[EndpointSpec]:
                     "2018-10-31T14:56:09+00:00",
                     "2018-10-31T19:48:06+00:00",
                 ],
+                "operationProfile": CALCULATE_VOYAGE_OPERATION_PROFILE,
+                "maxCalculationIntervalDistance": CALCULATE_VOYAGE_MAX_INTERVAL_DISTANCE_METERS,
                 "constraints": {
                     "maximumWaveHeight": 7,
                     "propellerRpm": {"allowedRange": {"min": 20, "max": 80}},
@@ -1883,6 +1890,9 @@ class RtzBatchFrame(ttk.Frame, LogMixin):
         template: Dict[str, Any],
     ) -> Dict[str, Any]:
         payload = json.loads(json.dumps(template))
+        if endpoint_name == CALCULATE_VOYAGE_BATCH_ENDPOINT:
+            return self._build_calculate_voyage_payload(points, schedule, metadata, payload)
+
         start_lat, start_lon = self._feature_lat_lng(points[0])
         end_lat, end_lon = self._feature_lat_lng(points[-1])
         payload["fromCoordinates"] = {"latitude": start_lat, "longitude": start_lon}
@@ -1900,6 +1910,80 @@ class RtzBatchFrame(ttk.Frame, LogMixin):
         if metadata.get("imo") and not payload.get("imoNumber"):
             payload["imoNumber"] = int(metadata["imo"])
         return payload
+
+    def _build_calculate_voyage_payload(
+        self,
+        points: List[Dict[str, Any]],
+        schedule: Dict[str, Any],
+        metadata: Dict[str, Any],
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        payload.pop("fromCoordinates", None)
+        payload.pop("toCoordinates", None)
+        payload.pop("startTime", None)
+        payload.pop("operationMethod", None)
+        payload["coordinates"] = [self._coordinate_payload(point) for point in points]
+        payload["timestamps"] = self._batch_timestamps(points, schedule, metadata, payload)
+        payload["operationProfile"] = CALCULATE_VOYAGE_OPERATION_PROFILE
+        payload["maxCalculationIntervalDistance"] = CALCULATE_VOYAGE_MAX_INTERVAL_DISTANCE_METERS
+        if metadata.get("imo") and not payload.get("imoNumber"):
+            payload["imoNumber"] = int(metadata["imo"])
+        return payload
+
+    def _coordinate_payload(self, point: Dict[str, Any]) -> Dict[str, float]:
+        lat, lon = self._feature_lat_lng(point)
+        return {"latitude": lat, "longitude": lon}
+
+    def _batch_timestamps(
+        self,
+        points: List[Dict[str, Any]],
+        schedule: Dict[str, Any],
+        metadata: Dict[str, Any],
+        payload: Dict[str, Any],
+    ) -> List[str]:
+        explicit = []
+        for point in points:
+            props = point.get("properties") if isinstance(point.get("properties"), dict) else {}
+            value = props.get("etd") or props.get("eta") or props.get("time") or props.get("timestamp")
+            explicit.append(_parse_utc(value))
+        if all(item is not None for item in explicit):
+            return [_utc_z(item) for item in explicit if item is not None]
+
+        existing = payload.get("timestamps")
+        if isinstance(existing, list) and len(existing) == len(points):
+            parsed_existing = [_parse_utc(item) for item in existing]
+            if all(item is not None for item in parsed_existing):
+                return [_utc_z(item) for item in parsed_existing if item is not None]
+
+        start_value = metadata.get("timestamp_iso") or schedule.get("etd")
+        if not start_value and isinstance(existing, list) and existing:
+            start_value = existing[0]
+        current = _parse_utc(start_value) or datetime.now(timezone.utc)
+        timestamps = [_utc_z(current)]
+        default_speed = self._default_batch_speed(points, schedule, payload)
+        for start, end in zip(points, points[1:]):
+            speed = self._point_speed(end) or self._point_speed(start) or default_speed
+            speed = max(1.0, float(speed))
+            hours = self._distance_nm(start, end) / speed
+            current = datetime.fromtimestamp(current.timestamp() + hours * 3600, tz=timezone.utc)
+            timestamps.append(_utc_z(current))
+        return timestamps
+
+    def _point_speed(self, point: Dict[str, Any]) -> Optional[float]:
+        props = point.get("properties") if isinstance(point.get("properties"), dict) else {}
+        value = props.get("speed") if isinstance(props, dict) else None
+        return float(value) if isinstance(value, (int, float)) else None
+
+    def _default_batch_speed(self, points: List[Dict[str, Any]], schedule: Dict[str, Any], payload: Dict[str, Any]) -> float:
+        speeds = [float(value) for value in schedule.get("speeds", []) if isinstance(value, (int, float))]
+        if not speeds:
+            speeds = [speed for point in points if (speed := self._point_speed(point)) is not None]
+        if speeds:
+            return max(1.0, sum(speeds) / len(speeds))
+        operation_method = payload.get("operationMethod")
+        if isinstance(operation_method, dict) and isinstance(operation_method.get("speedOverGround"), (int, float)):
+            return max(1.0, float(operation_method["speedOverGround"]))
+        return 10.0
 
     def _run_batch_request_with_retries(
         self,
