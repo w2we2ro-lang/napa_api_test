@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local settings and API secrets
+.env
+.env.*
+!.env.example
+napa_api_key.txt
+.napa_api_key
+napa_gui_defaults.json
+
+# Local run artifacts
+*.log

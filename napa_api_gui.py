@@ -53,6 +53,11 @@ EARTH_TEXTURE_URL = (
 EARTH_TEXTURE_CACHE_NAME = "blue_marble_200401_2048.jpg"
 EARTH_TEXTURE_WIDTH = 2048
 EARTH_TEXTURE_HEIGHT = 1024
+LOCAL_API_KEY_FILES = ("napa_api_key.txt", ".napa_api_key", ".env")
+API_KEY_ENV_NAMES = ("NAPA_API_KEY", "API_KEY", "X_API_KEY")
+GLOBE_MIN_ZOOM = 0.18
+GLOBE_MAX_ZOOM = 10.0
+GLOBE_ZOOM_FACTOR = 1.22
 
 HTTP_METHODS = ("get", "post", "put", "patch", "delete")
 ASYNC_DONE_STATES = {"completed", "complete", "done", "finished", "failed", "failure", "error", "ready"}
@@ -89,6 +94,52 @@ def _load_local_defaults() -> Dict[str, str]:
     except Exception:
         return {}
     return {key: str(value) for key, value in data.items() if value is not None}
+
+
+def _strip_optional_quotes(value: str) -> str:
+    value = value.strip().strip(";")
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1].strip()
+    return value
+
+
+def _read_api_key_file(path: Path) -> str:
+    try:
+        lines = path.read_text(encoding="utf-8-sig").splitlines()
+    except Exception:
+        return ""
+
+    fallback = ""
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.lower().startswith("export "):
+            line = line[7:].strip()
+        if "=" in line:
+            key, value = line.split("=", 1)
+            normalized_key = key.strip().upper().replace("-", "_")
+            if normalized_key in API_KEY_ENV_NAMES or normalized_key == "API_KEY":
+                return _strip_optional_quotes(value)
+            continue
+        if not fallback:
+            fallback = _strip_optional_quotes(line)
+    return fallback
+
+
+def _load_local_api_key(defaults: Optional[Dict[str, str]] = None) -> str:
+    for env_name in API_KEY_ENV_NAMES:
+        value = os.getenv(env_name, "").strip()
+        if value:
+            return value
+
+    for filename in LOCAL_API_KEY_FILES:
+        value = _read_api_key_file(Path(__file__).with_name(filename))
+        if value:
+            return value
+
+    defaults = defaults or {}
+    return defaults.get("api_key", "").strip()
 
 
 LOCAL_DEFAULTS = _load_local_defaults()
@@ -585,7 +636,7 @@ class NapaApiFrame(ttk.Frame, LogMixin):
         endpoint = self.selected_endpoint()
         root = self._root_app()
         base_url = root.base_url_var.get()
-        api_key = root.api_key_var.get().strip()
+        api_key = root.current_api_key()
         timeout = root.timeout_seconds()
         path_params = parse_key_values(self.path_params_text.get("1.0", tk.END), skip_empty=False)
         query_params = parse_key_values(self.query_params_text.get("1.0", tk.END), skip_empty=True)
@@ -703,7 +754,7 @@ class NapaApiFrame(ttk.Frame, LogMixin):
             messagebox.showinfo("Location", "No Location header has been captured yet.")
             return
         root = self._root_app()
-        api_key = root.api_key_var.get().strip()
+        api_key = root.current_api_key()
         headers = {"Accept": "application/json", "User-Agent": "napa-api-gui-test/1.0"}
         if api_key:
             headers["x-api-key"] = api_key
@@ -795,8 +846,8 @@ class GlobeCanvas(tk.Canvas):
         self.bind("<ButtonPress-1>", self._start_drag)
         self.bind("<B1-Motion>", self._drag)
         self.bind("<MouseWheel>", self._wheel)
-        self.bind("<Button-4>", lambda _event: self._zoom_by(1.12))
-        self.bind("<Button-5>", lambda _event: self._zoom_by(1 / 1.12))
+        self.bind("<Button-4>", lambda _event: self._zoom_by(GLOBE_ZOOM_FACTOR))
+        self.bind("<Button-5>", lambda _event: self._zoom_by(1 / GLOBE_ZOOM_FACTOR))
         self._load_earth_texture_async()
 
     def render_map_data(
@@ -828,10 +879,10 @@ class GlobeCanvas(tk.Canvas):
         height = max(self.winfo_height(), 1)
         self._cx = width / 2
         self._cy = height / 2
-        self._radius = max(80.0, min(420.0, min(width, height) * 0.43 * self.zoom))
+        self._radius = max(18.0, min(width, height) * 0.43 * self.zoom)
 
         self.create_rectangle(0, 0, width, height, fill="#07111f", outline="")
-        self._draw_satellite_globe()
+        self._draw_satellite_globe(width, height)
         self._draw_lines()
         self._draw_routes()
         self._draw_points()
@@ -849,13 +900,20 @@ class GlobeCanvas(tk.Canvas):
         self.redraw()
 
     def _wheel(self, event: tk.Event) -> None:
-        self._zoom_by(1.12 if int(event.delta) > 0 else 1 / 1.12)
+        delta = int(event.delta)
+        if delta == 0:
+            return
+        steps = int(delta / 120) if delta else 0
+        if steps == 0:
+            steps = 1 if delta > 0 else -1
+        steps = max(-6, min(6, steps))
+        self._zoom_by(GLOBE_ZOOM_FACTOR ** steps)
 
     def _zoom_by(self, factor: float) -> None:
-        self.zoom = max(0.55, min(2.4, self.zoom * factor))
+        self.zoom = max(GLOBE_MIN_ZOOM, min(GLOBE_MAX_ZOOM, self.zoom * factor))
         self.redraw()
 
-    def _draw_satellite_globe(self) -> None:
+    def _draw_satellite_globe(self, width: int, height: int) -> None:
         if Image is None or ImageTk is None:
             self._draw_texture_fallback("Install Pillow to render the satellite globe.")
             return
@@ -863,10 +921,9 @@ class GlobeCanvas(tk.Canvas):
             self._draw_texture_fallback(self._earth_texture_status)
             return
 
-        diameter = max(120, int(self._radius * 2))
-        globe = self._render_textured_globe(diameter)
+        globe = self._render_textured_globe(width, height)
         self._globe_photo = ImageTk.PhotoImage(globe)
-        self.create_image(self._cx, self._cy, image=self._globe_photo)
+        self.create_image(0, 0, anchor="nw", image=self._globe_photo)
         self.create_oval(
             self._cx - self._radius,
             self._cy - self._radius,
@@ -895,10 +952,10 @@ class GlobeCanvas(tk.Canvas):
             width=max(180, int(self._radius * 1.5)),
         )
 
-    def _render_textured_globe(self, diameter: int) -> Any:
+    def _render_textured_globe(self, width: int, height: int) -> Any:
         texture = self._earth_texture
-        radius = diameter / 2
-        image = Image.new("RGBA", (diameter, diameter), (0, 0, 0, 0))
+        radius = max(self._radius, 1.0)
+        image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         pixels = image.load()
         texture_pixels = texture.load()
         tex_w, tex_h = texture.size
@@ -907,10 +964,15 @@ class GlobeCanvas(tk.Canvas):
         cos_pitch = math.cos(self.pitch)
         sin_pitch = math.sin(self.pitch)
 
-        for py in range(diameter):
-            ny = (radius - py - 0.5) / radius
-            for px in range(diameter):
-                nx = (px + 0.5 - radius) / radius
+        left = max(0, int(math.floor(self._cx - radius)))
+        right = min(width, int(math.ceil(self._cx + radius)))
+        top = max(0, int(math.floor(self._cy - radius)))
+        bottom = min(height, int(math.ceil(self._cy + radius)))
+
+        for py in range(top, bottom):
+            ny = (self._cy - py - 0.5) / radius
+            for px in range(left, right):
+                nx = (px + 0.5 - self._cx) / radius
                 distance_sq = nx * nx + ny * ny
                 if distance_sq > 1:
                     continue
@@ -1085,7 +1147,7 @@ class GlobeCanvas(tk.Canvas):
         route_nodes = sum(len(route.get("points", [])) for route in self.routes)
         summary = (
             f"3D Satellite Globe  Points {len(self.points)}  Lines {len(self.lines)}  "
-            f"Routes {len(self.routes)}  Nodes {route_nodes}"
+            f"Routes {len(self.routes)}  Nodes {route_nodes}  Zoom {self.zoom:.2f}x"
         )
         self.create_text(14, 12, anchor="nw", text=summary, fill="#e2e8f0", font=("Segoe UI", 9, "bold"))
         legend = [
@@ -1477,7 +1539,7 @@ class NapaApiGui(tk.Tk):
         self.swagger_url_var = tk.StringVar(
             value=os.getenv("NAPA_SWAGGER_URL", LOCAL_DEFAULTS.get("swagger_url", DEFAULT_SWAGGER_URL))
         )
-        self.api_key_var = tk.StringVar(value=os.getenv("NAPA_API_KEY", LOCAL_DEFAULTS.get("api_key", "")))
+        self.api_key_var = tk.StringVar(value=_load_local_api_key(LOCAL_DEFAULTS))
         self.timeout_var = tk.StringVar(
             value=os.getenv("NAPA_TIMEOUT", LOCAL_DEFAULTS.get("timeout", str(DEFAULT_TIMEOUT_SECONDS)))
         )
@@ -1486,6 +1548,15 @@ class NapaApiGui(tk.Tk):
         self._build_widgets()
         self.set_endpoints(fallback_endpoints(), source="built-in fallback")
         self.after(300, self.reload_swagger_async)
+
+    def current_api_key(self) -> str:
+        api_key = self.api_key_var.get().strip()
+        if api_key:
+            return api_key
+        api_key = _load_local_api_key(LOCAL_DEFAULTS)
+        if api_key:
+            self.api_key_var.set(api_key)
+        return api_key
 
     def _build_widgets(self) -> None:
         toolbar = ttk.Frame(self, padding=(10, 8, 10, 4))
