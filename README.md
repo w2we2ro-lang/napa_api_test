@@ -24,12 +24,20 @@ pip install -r requirements_napa_gui.txt
 python napa_api_gui.py
 ```
 
-The app uses `x-api-key` authentication. Enter the API key in the toolbar, or set `NAPA_API_KEY`.
+The app uses `x-api-key` authentication. Enter the API key in the toolbar, set `NAPA_API_KEY`,
+or put it in a local gitignored file:
+
+```powershell
+Set-Content napa_api_key.txt "your-api-key"
+```
+
+You can also use `.env` with `NAPA_API_KEY=your-api-key`, or set `api_key` in
+`napa_gui_defaults.json`. These local secret files are ignored by `.gitignore`.
 
 For async voyage endpoints such as `find-shortest-voyage`, the app follows the `202 Accepted`
 `Location` header automatically when `Auto poll 202` is enabled. Completed JSON responses can be
 rendered on the ABB-style interactive `3D Globe` in the `Map Preview` tab with `Show Map`.
-Drag to rotate the globe and use the mouse wheel to zoom.
+Drag to rotate the globe and use the mouse wheel to zoom from `0.18x` to `10x`.
 
 Optional local defaults:
 
