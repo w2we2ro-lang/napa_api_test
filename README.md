@@ -26,6 +26,10 @@ python napa_api_gui.py
 
 The app uses `x-api-key` authentication. Enter the API key in the toolbar, or set `NAPA_API_KEY`.
 
+For async voyage endpoints such as `find-shortest-voyage`, the app follows the `202 Accepted`
+`Location` header automatically when `Auto poll 202` is enabled. Completed JSON responses can be
+rendered in the `Map Preview` tab with `Show Map`.
+
 Optional local defaults:
 
 ```powershell
