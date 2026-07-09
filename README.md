@@ -56,6 +56,13 @@ for `calculate-voyage-plan`. The calculate voyage batch request automatically se
 (`50 * 1852`). It saves `.request.json`, `.accepted.json`, `.response.json`, and a result `.rtz`
 when route geometry is returned.
 
+## Result Preview
+
+Use the `Result Preview` tab to inspect RTZ batch outputs. Add one or more result RTZ folders,
+then click `Generate Profiles` to render ABB-style speed and RPM profile charts from timestamped
+RTZ files. The tab auto-adds the active RTZ Batch output folder while a batch is running and can
+export the generated profile intervals to CSV.
+
 Optional local defaults:
 
 ```powershell
