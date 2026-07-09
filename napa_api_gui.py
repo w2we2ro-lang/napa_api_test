@@ -75,14 +75,14 @@ PROFILE_SERIES_COLORS = [
 BATCH_ENDPOINTS = {
     "Find shortest voyage": "/v1/find-shortest-voyage",
     "Find optimal voyage": "/v1/find-optimal-voyage",
-    "Calculate voyage plan": "/v2/calculate-voyage-plan",
+    "Calculate voyage": "/v2/calculate-voyage",
 }
 BATCH_OUTPUT_KINDS = {
     "Find shortest voyage": "FindShortestVoyage",
     "Find optimal voyage": "FindOptimalVoyage",
-    "Calculate voyage plan": "CalculateVoyagePlan",
+    "Calculate voyage": "CalculateVoyage",
 }
-CALCULATE_VOYAGE_BATCH_ENDPOINT = "Calculate voyage plan"
+CALCULATE_VOYAGE_BATCH_ENDPOINT = "Calculate voyage"
 CALCULATE_VOYAGE_OPERATION_PROFILE = "OptimalSpeed"
 CALCULATE_VOYAGE_MAX_INTERVAL_DISTANCE_METERS = 50 * 1852
 DEFAULT_BATCH_ROOT = Path.home() / "Downloads"
@@ -103,7 +103,7 @@ ENABLED_ENDPOINT_PATHS = (
     "/v1/find-shortest-voyage",
     "/v1/find-optimal-voyage",
     "/v1/try-get-voyage",
-    "/v2/calculate-voyage-plan",
+    "/v2/calculate-voyage",
 )
 ENABLED_ENDPOINT_RANK = {path: index for index, path in enumerate(ENABLED_ENDPOINT_PATHS)}
 
@@ -465,8 +465,8 @@ def fallback_endpoints() -> List[EndpointSpec]:
         EndpointSpec(
             tag="Voyage",
             method="POST",
-            path="/v2/calculate-voyage-plan",
-            summary="Returns the voyage for a given voyage plan.",
+            path="/v2/calculate-voyage",
+            summary="Returns the calculated voyage for the given coordinates and timestamps.",
             content_type="application/json",
             example={
                 "imoNumber": 9629457,
