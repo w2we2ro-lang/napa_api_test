@@ -85,6 +85,9 @@ BATCH_OUTPUT_KINDS = {
 CALCULATE_VOYAGE_BATCH_ENDPOINT = "Calculate voyage"
 CALCULATE_VOYAGE_OPERATION_PROFILE = "OptimalSpeed"
 CALCULATE_VOYAGE_MAX_INTERVAL_DISTANCE_METERS = 50 * 1852
+METERS_PER_SECOND_TO_KNOTS = 1.9438444924406048
+SPEED_KEYS_KNOTS = ("speedKnots", "speed", "sog", "plannedSpeed")
+SPEED_KEYS_MPS = ("speedOverGround",)
 DEFAULT_BATCH_ROOT = Path("C:/Users/Device_SHI/Downloads/EVERMAX_Yantian2Panama/EVERMAX_Yantian2Panama")
 DEFAULT_BATCH_PLANNED_RTZ = DEFAULT_BATCH_ROOT / "9935208_SAS_Planned_20260606_092117.rtz"
 DEFAULT_BATCH_OPTIMAL_DIR = DEFAULT_BATCH_ROOT / "optimal"
@@ -258,6 +261,47 @@ def _use_next_waypoint_speed_rpm(points: List[Dict[str, Any]]) -> List[Dict[str,
         if index + 1 < len(original_values):
             props.update(original_values[index + 1])
     return points
+
+
+def _numeric_leaf(value: Any) -> Optional[float]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    if isinstance(value, dict):
+        for key in ("value", "Value", "result", "estimatedValue", "calculatedValue"):
+            nested = _numeric_leaf(value.get(key))
+            if nested is not None:
+                return nested
+    return None
+
+
+def _mps_to_knots(value: float) -> float:
+    return value * METERS_PER_SECOND_TO_KNOTS
+
+
+def _speed_knots_from_obj(obj: Any, nested_keys: Tuple[str, ...] = ("properties", "operationMethod", "operation_method")) -> Optional[float]:
+    if not isinstance(obj, dict):
+        return None
+    for key in SPEED_KEYS_KNOTS:
+        value = _numeric_leaf(obj.get(key))
+        if value is not None:
+            return value
+    for key in SPEED_KEYS_MPS:
+        value = _numeric_leaf(obj.get(key))
+        if value is not None:
+            return _mps_to_knots(value)
+    for nested_key in nested_keys:
+        nested = obj.get(nested_key)
+        nested_value = _speed_knots_from_obj(nested, nested_keys) if isinstance(nested, dict) else None
+        if nested_value is not None:
+            return nested_value
+    return None
 
 
 LOCAL_DEFAULTS = _load_local_defaults()
@@ -1551,7 +1595,7 @@ class MapPreviewFrame(ttk.Frame):
                     **point,
                     "label": point_label(item, f"WP {index}"),
                 }
-                speed = numeric_from_obj(item, ("speed", "speedOverGround", "speedKnots", "sog", "plannedSpeed"))
+                speed = _speed_knots_from_obj(item, ("properties", "operationMethod"))
                 if speed is not None:
                     route_point["speed"] = speed
                 route_points.append(route_point)
@@ -2281,7 +2325,7 @@ class RtzBatchFrame(ttk.Frame, LogMixin):
 
         def inherited_route_properties(obj: Any, inherited: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
             properties = dict(inherited or {})
-            speed = numeric_value(obj, ("speed", "speedOverGround", "speedKnots", "sog", "plannedSpeed"))
+            speed = _speed_knots_from_obj(obj)
             if speed is not None:
                 properties["speed"] = speed
             rpm = numeric_value(obj, ("rpm", "engineRpm", "shaftRpm"))
@@ -2304,7 +2348,7 @@ class RtzBatchFrame(ttk.Frame, LogMixin):
             props = obj.get("properties") if isinstance(obj.get("properties"), dict) else {}
             properties = inherited_route_properties(obj, inherited)
             properties["name"] = str(props.get("name") or obj.get("name") or obj.get("label") or f"WP {index}")
-            speed = numeric_value(obj, ("speed", "speedOverGround", "speedKnots", "sog", "plannedSpeed"))
+            speed = _speed_knots_from_obj(obj)
             if speed is not None:
                 properties["speed"] = speed
             rpm = numeric_value(obj, ("rpm", "engineRpm", "shaftRpm"))
