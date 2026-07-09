@@ -39,6 +39,19 @@ For async voyage endpoints such as `find-shortest-voyage`, the app follows the `
 rendered on the ABB-style interactive `3D Globe` in the `Map Preview` tab with `Show Map`.
 Drag to rotate the globe and use the mouse wheel to zoom from `0.18x` to `10x`.
 
+## RTZ Batch
+
+Use the `RTZ Batch` tab to run ABB-style continuous RTZ batch tests for:
+
+- `POST /v1/find-shortest-voyage`
+- `POST /v1/find-optimal-voyage`
+
+Select a planned RTZ, a folder of reference optimal RTZ files, and an output folder. The app uses
+each reference optimal RTZ's first waypoint as the current position, cuts the remaining planned
+route from that point, then sends a NAPA voyage request using the first/last remaining waypoints as
+`fromCoordinates` and `toCoordinates`. It saves `.request.json`, `.accepted.json`,
+`.response.json`, and a result `.rtz` when route geometry is returned.
+
 Optional local defaults:
 
 ```powershell
