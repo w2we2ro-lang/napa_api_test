@@ -1,6 +1,15 @@
 # napa_api_test
 
-Tkinter GUI tester for the NAPA Voyage Optimization API.
+Tkinter GUI tester for the NAPA Voyage Optimization API endpoints enabled for this project.
+
+Enabled endpoints:
+
+- `POST /v1/performance-models/tune`
+- `POST /v1/performance-models/tune-relative`
+- `POST /v1/find-shortest-voyage`
+- `POST /v1/find-optimal-voyage`
+- `GET /v1/try-get-voyage`
+- `POST /v2/calculate-voyage-plan`
 
 ## Files
 

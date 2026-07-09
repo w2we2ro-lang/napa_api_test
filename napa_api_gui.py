@@ -2,7 +2,7 @@
 NAPA Voyage Optimization API GUI Tester
 
 One Tkinter app for testing the NAPA Voyage Optimization API:
-- Swagger-driven endpoint tabs
+- Swagger-driven endpoint tabs limited to the enabled project APIs
 - x-api-key authentication
 - Editable request JSON or form fields
 - Response logging and async Location follow-up
@@ -40,6 +40,16 @@ DEFAULT_TIMEOUT_SECONDS = 60
 HTTP_METHODS = ("get", "post", "put", "patch", "delete")
 ASYNC_DONE_STATES = {"completed", "complete", "done", "finished", "failed", "failure", "error", "ready"}
 ASYNC_WAIT_STATES = {"accepted", "queued", "pending", "running", "processing", "inprogress", "in_progress"}
+
+ENABLED_ENDPOINT_PATHS = (
+    "/v1/performance-models/tune",
+    "/v1/performance-models/tune-relative",
+    "/v1/find-shortest-voyage",
+    "/v1/find-optimal-voyage",
+    "/v1/try-get-voyage",
+    "/v2/calculate-voyage-plan",
+)
+ENABLED_ENDPOINT_RANK = {path: index for index, path in enumerate(ENABLED_ENDPOINT_PATHS)}
 
 PARAMETER_DEFAULTS = {
     "guid": "00000000-0000-0000-0000-000000000000",
@@ -128,6 +138,8 @@ def parse_swagger(data: Dict[str, Any]) -> List[EndpointSpec]:
     tag_rank = {name: index for index, name in enumerate(tag_order)}
 
     for path, operations in paths.items():
+        if path not in ENABLED_ENDPOINT_RANK:
+            continue
         if not isinstance(operations, dict):
             continue
         for method in HTTP_METHODS:
@@ -175,116 +187,139 @@ def parse_swagger(data: Dict[str, Any]) -> List[EndpointSpec]:
                 )
             )
 
-    endpoints.sort(key=lambda item: (tag_rank.get(item.tag, 999), item.tag, item.path, item.method))
+    endpoints.sort(
+        key=lambda item: (
+            ENABLED_ENDPOINT_RANK.get(item.path, 999),
+            tag_rank.get(item.tag, 999),
+            item.tag,
+            item.method,
+        )
+    )
     return endpoints
 
 
 def fallback_endpoints() -> List[EndpointSpec]:
     examples: List[EndpointSpec] = [
         EndpointSpec(
-            tag="Forecast",
+            tag="PerformanceModel",
             method="POST",
-            path="/v2/interpolate-conditions",
-            summary="Interpolates conditions for given times and coordinates.",
-            content_type="application/json",
-            example={
-                "coordinates": [
-                    {"latitude": 60.1533167, "longitude": 24.9489667},
-                    {"latitude": 58.549169, "longitude": 21.042663},
-                    {"latitude": 56.468645, "longitude": 17.524141},
-                ],
-                "timestamps": [
-                    "2018-10-30T00:00:00+00:00",
-                    "2018-10-30T11:18:46+00:00",
-                    "2018-10-30T23:44:34+00:00",
-                ],
-            },
-        ),
-        EndpointSpec(
-            tag="Forecast",
-            method="POST",
-            path="/v1/forecast-metadata/status",
-            summary="Get information about latest forecast updates.",
-        ),
-        EndpointSpec(
-            tag="Performance",
-            method="POST",
-            path="/v1/performance/calculate-for-condition",
-            summary="Calculates performance for a given condition.",
+            path="/v1/performance-models/tune",
+            summary="Tunes a given base performance model to match fuel oil consumption in ideal conditions.",
             content_type="application/json",
             example={
                 "imoNumber": 9629457,
-                "draft": 14,
-                "operationMethod": {"speedOverGround": 7},
-                "courseOverGround": 37,
-                "windSpeed": 13.5,
-                "windDirection": 266,
-                "windWavesSignificantHeight": 3.2,
-                "windWavesZeroCrossingPeriod": 6.9,
-                "windWavesDirection": 262,
-                "swellSignificantHeight": 1,
-                "swellZeroCrossingPeriod": 6.3,
-                "swellDirection": 199,
-                "seaCurrentSpeed": 0.1,
-                "seaCurrentDirection": 158,
-                "waterDepth": 82,
+                "tuningPoints": [
+                    {
+                        "draft": 10,
+                        "speedOverGround": 6,
+                        "dailyFuelConsumption": 25000,
+                    }
+                ],
             },
         ),
         EndpointSpec(
             tag="PerformanceModel",
             method="POST",
-            path="/v1/performance-models/create",
-            summary="Creates a generic performance model from ship particulars.",
+            path="/v1/performance-models/tune-relative",
+            summary="Tunes a given base performance model by a relative fuel consumption factor.",
             content_type="application/json",
             example={
                 "imoNumber": 9629457,
-                "shipType": "Container",
-                "lengthOverAll": 250,
-                "breadth": 40,
-                "designDraft": 10,
-                "engineBrakePower": 30000000,
-                "serviceSpeed": 10,
+                "draft": 10,
+                "speedOverGround": 6,
+                "fuelConsumptionFactor": 1.15,
             },
-        ),
-        EndpointSpec(
-            tag="PerformanceModel",
-            method="GET",
-            path="/v1/performance-models/try-get-performance-model",
-            summary="Returns performance model calculation status.",
-            query_params={"guid": PARAMETER_DEFAULTS["guid"]},
-        ),
-        EndpointSpec(
-            tag="Route",
-            method="POST",
-            path="/v1/find-shortest-route",
-            summary="Returns the shortest route.",
-            content_type="application/json",
-            example={
-                "start": {"latitude": 60.1533167, "longitude": 24.9489667},
-                "destination": {"latitude": 53.96666718, "longitude": 10.9},
-            },
-        ),
-        EndpointSpec(
-            tag="RouteNetwork",
-            method="GET",
-            path="/v1/get-version",
-            summary="Returns the version of the route network currently in use.",
         ),
         EndpointSpec(
             tag="Voyage",
             method="POST",
-            path="/v1/calculate-voyage",
-            summary="Returns the voyage for a given route.",
+            path="/v1/find-shortest-voyage",
+            summary="Returns the location for the voyage with the shortest route.",
             content_type="application/json",
             example={
                 "imoNumber": 9629457,
+                "fromCoordinates": {"latitude": 60.18333333, "longitude": 24.96666667},
+                "toCoordinates": {"latitude": 53.96666718, "longitude": 10.9},
+                "startTime": "2026-07-09T00:00:00Z",
                 "draft": 14,
                 "operationMethod": {"speedOverGround": 7},
-                "route": [
+                "fuels": {
+                    "availableFuels": [
+                        {"type": "LSFO", "price": 400, "lowerHeatValue": 41600},
+                        {"type": "MGO", "price": 600, "lowerHeatValue": 42800},
+                    ],
+                    "outsideEca": "LSFO",
+                    "insideEca": "MGO",
+                },
+                "constraints": {
+                    "maximumWaveHeight": 7,
+                    "propellerRpm": {"allowedRange": {"min": 20, "max": 80}},
+                },
+            },
+        ),
+        EndpointSpec(
+            tag="Voyage",
+            method="POST",
+            path="/v1/find-optimal-voyage",
+            summary="Returns the location for the weather-optimized voyage.",
+            content_type="application/json",
+            example={
+                "imoNumber": 9629457,
+                "fromCoordinates": {"latitude": 60.18333333, "longitude": 24.96666667},
+                "toCoordinates": {"latitude": 53.96666718, "longitude": 10.9},
+                "startTime": "2026-07-09T00:00:00Z",
+                "draft": 14,
+                "operationMethod": {"speedOverGround": 7},
+                "fuels": {
+                    "availableFuels": [
+                        {"type": "LSFO", "price": 400, "lowerHeatValue": 41600},
+                        {"type": "MGO", "price": 600, "lowerHeatValue": 42800},
+                    ],
+                    "outsideEca": "LSFO",
+                    "insideEca": "MGO",
+                },
+                "constraints": {
+                    "maximumWaveHeight": 7,
+                    "propellerRpm": {"allowedRange": {"min": 20, "max": 80}},
+                },
+            },
+        ),
+        EndpointSpec(
+            tag="Voyage",
+            method="GET",
+            path="/v1/try-get-voyage",
+            summary="Returns the status of the voyage calculation for the provided GUID.",
+            query_params={"guid": PARAMETER_DEFAULTS["guid"]},
+        ),
+        EndpointSpec(
+            tag="Voyage",
+            method="POST",
+            path="/v2/calculate-voyage-plan",
+            summary="Returns the voyage for a given voyage plan.",
+            content_type="application/json",
+            example={
+                "imoNumber": 9629457,
+                "coordinates": [
                     {"latitude": 60.1533167, "longitude": 24.9489667},
+                    {"latitude": 58.549169, "longitude": 21.042663},
+                    {"latitude": 56.468645, "longitude": 17.524141},
+                    {"latitude": 55.792767, "longitude": 15.700957},
+                    {"latitude": 54.651725, "longitude": 12.375373},
                     {"latitude": 53.96666718, "longitude": 10.9},
                 ],
-                "startTime": "2018-10-30T00:00:00+00:00",
+                "draft": 14,
+                "timestamps": [
+                    "2018-10-30T00:00:00+00:00",
+                    "2018-10-30T11:18:46+00:00",
+                    "2018-10-30T23:44:34+00:00",
+                    "2018-10-31T05:08:32+00:00",
+                    "2018-10-31T14:56:09+00:00",
+                    "2018-10-31T19:48:06+00:00",
+                ],
+                "constraints": {
+                    "maximumWaveHeight": 7,
+                    "propellerRpm": {"allowedRange": {"min": 20, "max": 80}},
+                },
             },
         ),
     ]
