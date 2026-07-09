@@ -28,7 +28,8 @@ The app uses `x-api-key` authentication. Enter the API key in the toolbar, or se
 
 For async voyage endpoints such as `find-shortest-voyage`, the app follows the `202 Accepted`
 `Location` header automatically when `Auto poll 202` is enabled. Completed JSON responses can be
-rendered in the `Map Preview` tab with `Show Map`.
+rendered on the ABB-style interactive `3D Globe` in the `Map Preview` tab with `Show Map`.
+Drag to rotate the globe and use the mouse wheel to zoom.
 
 Optional local defaults:
 
