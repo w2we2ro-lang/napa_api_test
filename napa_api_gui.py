@@ -97,6 +97,7 @@ ASYNC_DONE_STATES = {"completed", "complete", "done", "finished", "failed", "fai
 ASYNC_WAIT_STATES = {"accepted", "queued", "pending", "running", "processing", "inprogress", "in_progress"}
 
 ENABLED_ENDPOINT_PATHS = (
+    "/v1/performance-models/create",
     "/v1/performance-models/tune",
     "/v1/performance-models/tune-relative",
     "/v1/find-shortest-voyage",
@@ -116,6 +117,26 @@ PARAMETER_DEFAULTS = {
     "performanceModelId": "00000000-0000-0000-0000-000000000000",
     "routeNetworkVersion": "",
 }
+
+PROJECT_PERFORMANCE_CREATE_EXAMPLE = {
+    "imoNumber": 9935208,
+    "shipType": "Container",
+    "lengthOverAll": 366,
+    "breadth": 51,
+    "designDraft": 14,
+    "engineBrakePower": 30000000,
+    "serviceSpeed": 10,
+}
+PROJECT_ENDPOINT_EXAMPLE_OVERRIDES = {
+    "/v1/performance-models/create": PROJECT_PERFORMANCE_CREATE_EXAMPLE,
+}
+
+
+def _example_for_endpoint(path: str, example: Any) -> Any:
+    override = PROJECT_ENDPOINT_EXAMPLE_OVERRIDES.get(path)
+    if override is not None:
+        return json.loads(json.dumps(override))
+    return example
 
 
 def _load_local_defaults() -> Dict[str, str]:
@@ -323,7 +344,7 @@ def parse_swagger(data: Dict[str, Any]) -> List[EndpointSpec]:
                     path=path,
                     summary=summary,
                     content_type=content_type,
-                    example=example,
+                    example=_example_for_endpoint(path, example),
                     path_params=path_params,
                     query_params=query_params,
                 )
@@ -342,6 +363,14 @@ def parse_swagger(data: Dict[str, Any]) -> List[EndpointSpec]:
 
 def fallback_endpoints() -> List[EndpointSpec]:
     examples: List[EndpointSpec] = [
+        EndpointSpec(
+            tag="PerformanceModel",
+            method="POST",
+            path="/v1/performance-models/create",
+            summary="Creates a generic performance model for IMO 9935208 using ABB project vessel particulars.",
+            content_type="application/json",
+            example=PROJECT_PERFORMANCE_CREATE_EXAMPLE,
+        ),
         EndpointSpec(
             tag="PerformanceModel",
             method="POST",
