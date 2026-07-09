@@ -4,6 +4,7 @@ Tkinter GUI tester for the NAPA Voyage Optimization API endpoints enabled for th
 
 Enabled endpoints:
 
+- `POST /v1/performance-models/create`
 - `POST /v1/performance-models/tune`
 - `POST /v1/performance-models/tune-relative`
 - `POST /v1/find-shortest-voyage`
@@ -38,6 +39,9 @@ For async voyage endpoints such as `find-shortest-voyage`, the app follows the `
 `Location` header automatically when `Auto poll 202` is enabled. Completed JSON responses can be
 rendered on the ABB-style interactive `3D Globe` in the `Map Preview` tab with `Show Map`.
 Drag to rotate the globe and use the mouse wheel to zoom from `0.18x` to `10x`.
+
+The `performance-models/create` sample is preset for IMO `9935208` using ABB project vessel
+particulars: container ship, LOA `366 m`, breadth `51 m`.
 
 ## RTZ Batch
 
