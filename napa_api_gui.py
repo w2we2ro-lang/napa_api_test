@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from tkinter import messagebox, scrolledtext, ttk
 from typing import Any, Dict, Iterable, List, Optional, Tuple
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlunparse
 
 try:
     import requests
@@ -36,6 +36,8 @@ except ImportError:  # pragma: no cover - exercised only before dependencies are
 DEFAULT_BASE_URL = "https://api.fleetintelligence.napa.fi/vo"
 DEFAULT_SWAGGER_URL = "https://api.fleetintelligence.napa.fi/vo/v1/swagger.json"
 DEFAULT_TIMEOUT_SECONDS = 60
+POLL_INTERVAL_SECONDS = 3
+POLL_MAX_ATTEMPTS = 40
 
 HTTP_METHODS = ("get", "post", "put", "patch", "delete")
 ASYNC_DONE_STATES = {"completed", "complete", "done", "finished", "failed", "failure", "error", "ready"}
@@ -345,12 +347,19 @@ def absolute_location(base_url: str, location: str) -> str:
     if not location:
         return ""
     if location.startswith("http://") or location.startswith("https://"):
-        return location
+        return normalize_async_location(location)
     parsed = urlparse(normalize_base_url(base_url))
     origin = f"{parsed.scheme}://{parsed.netloc}"
     if location.startswith("/"):
-        return urljoin(origin, location)
-    return urljoin(normalize_base_url(base_url) + "/", location)
+        return normalize_async_location(urljoin(origin, location))
+    return normalize_async_location(urljoin(normalize_base_url(base_url) + "/", location))
+
+
+def normalize_async_location(location: str) -> str:
+    parsed = urlparse(location)
+    if parsed.path.endswith("/vo/try-get-voyage"):
+        parsed = parsed._replace(path=parsed.path[: -len("/try-get-voyage")] + "/v1/try-get-voyage")
+    return urlunparse(parsed)
 
 
 def parse_key_values(raw: str, skip_empty: bool = True) -> Dict[str, str]:
@@ -429,6 +438,7 @@ class NapaApiFrame(ttk.Frame, LogMixin):
         self.latest_response_data: Any = None
         self.latest_response_text = ""
         self.latest_location = ""
+        self.auto_poll_var = tk.BooleanVar(value=True)
 
         self._init_log_queue()
         self._build_widgets()
@@ -449,11 +459,12 @@ class NapaApiFrame(ttk.Frame, LogMixin):
         ttk.Button(controls, text="Send Request", command=self.send_request).grid(row=0, column=3, padx=3)
         ttk.Button(controls, text="GET Location", command=self.get_last_location_once).grid(row=0, column=4, padx=3)
         ttk.Button(controls, text="Poll Location", command=self.poll_last_location).grid(row=0, column=5, padx=3)
+        ttk.Checkbutton(controls, text="Auto poll 202", variable=self.auto_poll_var).grid(row=0, column=6, padx=3)
         controls.columnconfigure(1, weight=1)
 
         self.summary_var = tk.StringVar(value="")
         ttk.Label(controls, textvariable=self.summary_var, wraplength=980, foreground="#444").grid(
-            row=1, column=0, columnspan=6, sticky="ew", pady=(6, 0)
+            row=1, column=0, columnspan=7, sticky="ew", pady=(6, 0)
         )
 
         details = ttk.Frame(self, padding=(8, 0, 8, 4))
@@ -502,6 +513,7 @@ class NapaApiFrame(ttk.Frame, LogMixin):
         ttk.Label(location_frame, text="Last Location").pack(side=tk.LEFT)
         self.location_var = tk.StringVar()
         ttk.Entry(location_frame, textvariable=self.location_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+        ttk.Button(location_frame, text="Show Map", command=self.show_latest_response_on_map).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(location_frame, text="Clear Log", command=self.clear_log).pack(side=tk.LEFT)
 
         log_frame = ttk.LabelFrame(response_frame, text="Response / Log")
@@ -574,6 +586,7 @@ class NapaApiFrame(ttk.Frame, LogMixin):
             "params": query_params,
             "timeout": timeout,
             "_base_url": base_url,
+            "_auto_poll": bool(self.auto_poll_var.get()),
         }
 
         raw_body = self.request_text.get("1.0", tk.END).strip()
@@ -603,15 +616,22 @@ class NapaApiFrame(ttk.Frame, LogMixin):
 
     def _send_worker(self, kwargs: Dict[str, Any]) -> None:
         base_url = kwargs.pop("_base_url")
+        auto_poll = bool(kwargs.pop("_auto_poll", False))
         started = time.time()
         try:
             response = require_requests().request(**kwargs)
             elapsed = time.time() - started
-            self._handle_response(response, elapsed, base_url)
+            self._handle_response(response, elapsed, base_url, auto_poll=auto_poll)
         except Exception as exc:
             self.log(f"ERROR: {exc}")
 
-    def _handle_response(self, response: requests.Response, elapsed: float, base_url: str) -> None:
+    def _handle_response(
+        self,
+        response: requests.Response,
+        elapsed: float,
+        base_url: str,
+        auto_poll: bool = False,
+    ) -> None:
         location = response.headers.get("Location", "")
         if location:
             location = absolute_location(base_url, location)
@@ -647,6 +667,14 @@ class NapaApiFrame(ttk.Frame, LogMixin):
             self.log(body_text)
         else:
             self.log("(empty response body)")
+        if response.status_code == 202 and location:
+            if auto_poll:
+                self.log("202 Accepted with Location. Polling result automatically...")
+                self.after(0, lambda: self._request_location(poll=True, location_override=location, quiet=True))
+            else:
+                self.log("202 Accepted. Click 'Poll Location' to fetch the voyage result.")
+        elif parsed is not None and self._is_async_done(parsed):
+            self.after(0, lambda: self.show_latest_response_on_map(auto=True))
 
     def get_last_location_once(self) -> None:
         self._request_location(poll=False)
@@ -654,8 +682,8 @@ class NapaApiFrame(ttk.Frame, LogMixin):
     def poll_last_location(self) -> None:
         self._request_location(poll=True)
 
-    def _request_location(self, poll: bool) -> None:
-        location = self.location_var.get().strip() or self.latest_location
+    def _request_location(self, poll: bool, location_override: str = "", quiet: bool = False) -> None:
+        location = location_override.strip() or self.location_var.get().strip() or self.latest_location
         if not location:
             messagebox.showinfo("Location", "No Location header has been captured yet.")
             return
@@ -671,13 +699,13 @@ class NapaApiFrame(ttk.Frame, LogMixin):
             "timeout": root.timeout_seconds(),
             "_base_url": root.base_url_var.get(),
         }
-        self.log(("Polling " if poll else "GET ") + location)
+        if not quiet:
+            self.log(("Polling " if poll else "GET ") + location)
         threading.Thread(target=self._location_worker, args=(kwargs, poll), daemon=True).start()
 
     def _location_worker(self, kwargs: Dict[str, Any], poll: bool) -> None:
         base_url = kwargs.pop("_base_url")
-        max_attempts = 20 if poll else 1
-        interval = 3
+        max_attempts = POLL_MAX_ATTEMPTS if poll else 1
         for attempt in range(1, max_attempts + 1):
             started = time.time()
             try:
@@ -689,9 +717,13 @@ class NapaApiFrame(ttk.Frame, LogMixin):
             self.log(f"Location attempt {attempt}/{max_attempts}")
             self._handle_response(response, elapsed, base_url)
             parsed, _body_text = _response_body_text(response)
-            if not poll or response.status_code >= 400 or self._is_async_done(parsed):
+            if not poll or response.status_code >= 400:
                 return
-            time.sleep(interval)
+            if parsed is not None and self._is_async_done(parsed):
+                return
+            if parsed is None and response.status_code != 202:
+                return
+            time.sleep(POLL_INTERVAL_SECONDS)
 
     def _is_async_done(self, data: Any) -> bool:
         if not isinstance(data, dict):
@@ -707,6 +739,23 @@ class NapaApiFrame(ttk.Frame, LogMixin):
         if any(key in data for key in ("data", "result", "voyage", "route", "performanceModelId")):
             return True
         return False
+
+    def show_latest_response_on_map(self, auto: bool = False) -> None:
+        data = self.latest_response_data
+        if data is None and self.latest_response_text:
+            try:
+                data = json.loads(self.latest_response_text)
+            except Exception:
+                data = None
+        if data is None:
+            if not auto:
+                messagebox.showinfo("Map Preview", "No parsed JSON response is available yet.")
+            return
+        root = self._root_app()
+        rendered = root.map_tab.load_json_data(data, "Loaded response JSON.", render=True, show_errors=not auto)
+        if rendered:
+            root.tabs.select(root.map_tab)
+            self.log("Rendered latest response in Map Preview.")
 
 
 class MapCanvas(tk.Canvas):
@@ -819,8 +868,20 @@ class MapPreviewFrame(ttk.Frame):
         if data is None:
             messagebox.showinfo("Map Preview", "No parsed JSON response is available yet.")
             return
+        self.load_json_data(data, "Loaded active response JSON.", render=False)
+
+    def load_json_data(
+        self,
+        data: Any,
+        message: str,
+        render: bool = False,
+        show_errors: bool = True,
+    ) -> bool:
         self.source_data = data
-        self._set_source(json_preview(data), "Loaded active response JSON.")
+        self._set_source(json_preview(data), message)
+        if render:
+            return self.render_map(show_errors=show_errors)
+        return True
 
     def clear(self) -> None:
         self.source_data = None
@@ -828,7 +889,7 @@ class MapPreviewFrame(ttk.Frame):
         self.result_text.delete("1.0", tk.END)
         self.map_canvas.clear_map()
 
-    def render_map(self) -> None:
+    def render_map(self, show_errors: bool = True) -> bool:
         try:
             data = self.source_data if self.source_data is not None else json.loads(self.source_text.get("1.0", tk.END))
             points, lines = self._extract_map_data(data)
@@ -837,9 +898,12 @@ class MapPreviewFrame(ttk.Frame):
             self.map_canvas.render(points, lines)
             self._log(f"Points: {len(points)}")
             self._log(f"Lines: {len(lines)}")
+            return True
         except Exception as exc:
             self._log(f"ERROR: {exc}")
-            messagebox.showerror("Map Preview Error", str(exc))
+            if show_errors:
+                messagebox.showerror("Map Preview Error", str(exc))
+            return False
 
     def _set_source(self, raw: str, message: str) -> None:
         self.source_text.delete("1.0", tk.END)
