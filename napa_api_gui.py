@@ -2285,10 +2285,28 @@ class RtzBatchFrame(ttk.Frame, LogMixin):
                 value = number(obj.get(key))
                 if value is not None:
                     return value
-            props = obj.get("properties")
-            return numeric_value(props, keys) if isinstance(props, dict) else None
+            for nested_key in ("properties", "operationMethod", "operation_method"):
+                nested = obj.get(nested_key)
+                nested_value = numeric_value(nested, keys) if isinstance(nested, dict) else None
+                if nested_value is not None:
+                    return nested_value
+            return None
 
-        def feature_from_point(obj: Any, index: int) -> Optional[Dict[str, Any]]:
+        def inherited_route_properties(obj: Any, inherited: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+            properties = dict(inherited or {})
+            speed = numeric_value(obj, ("speed", "speedOverGround", "speedKnots", "sog", "plannedSpeed"))
+            if speed is not None:
+                properties["speed"] = speed
+            rpm = numeric_value(obj, ("rpm", "engineRpm", "shaftRpm"))
+            if rpm is not None:
+                properties["rpm"] = rpm
+            return properties
+
+        def feature_from_point(
+            obj: Any,
+            index: int,
+            inherited: Optional[Dict[str, Any]] = None,
+        ) -> Optional[Dict[str, Any]]:
             if not isinstance(obj, dict):
                 return None
             geometry = obj.get("geometry") if isinstance(obj.get("geometry"), dict) else {}
@@ -2297,7 +2315,8 @@ class RtzBatchFrame(ttk.Frame, LogMixin):
                 return None
             lat, lon = pair
             props = obj.get("properties") if isinstance(obj.get("properties"), dict) else {}
-            properties = {"name": str(props.get("name") or obj.get("name") or obj.get("label") or f"WP {index}")}
+            properties = inherited_route_properties(obj, inherited)
+            properties["name"] = str(props.get("name") or obj.get("name") or obj.get("label") or f"WP {index}")
             speed = numeric_value(obj, ("speed", "speedOverGround", "speedKnots", "sog", "plannedSpeed"))
             if speed is not None:
                 properties["speed"] = speed
@@ -2311,7 +2330,7 @@ class RtzBatchFrame(ttk.Frame, LogMixin):
                     properties[key] = obj[key]
             return {"type": "Feature", "properties": properties, "geometry": {"type": "Point", "coordinates": [lon, lat]}}
 
-        def add_line(coords: Any) -> None:
+        def add_line(coords: Any, inherited: Optional[Dict[str, Any]] = None) -> None:
             if not isinstance(coords, list):
                 return
             route_points = []
@@ -2319,38 +2338,53 @@ class RtzBatchFrame(ttk.Frame, LogMixin):
                 pair = coord_pair(item)
                 if pair:
                     lat, lon = pair
-                    route_points.append({"type": "Feature", "properties": {"name": f"WP {index}"}, "geometry": {"type": "Point", "coordinates": [lon, lat]}})
+                    properties = dict(inherited or {})
+                    properties["name"] = f"WP {index}"
+                    route_points.append({"type": "Feature", "properties": properties, "geometry": {"type": "Point", "coordinates": [lon, lat]}})
             if len(route_points) >= 2:
                 candidates.append(route_points)
 
-        def visit(obj: Any) -> None:
+        def visit(obj: Any, inherited: Optional[Dict[str, Any]] = None) -> None:
             if isinstance(obj, dict):
+                local_inherited = inherited_route_properties(obj, inherited)
                 geometry = obj.get("geometry") if isinstance(obj.get("geometry"), dict) else {}
                 coords = geometry.get("coordinates")
                 if geometry.get("type") == "LineString":
-                    add_line(coords)
+                    add_line(coords, local_inherited)
                 points = obj.get("points")
                 if isinstance(points, list):
-                    route_points = [point for index, item in enumerate(points, start=1) if (point := feature_from_point(item, index))]
+                    route_points = [
+                        point
+                        for index, item in enumerate(points, start=1)
+                        if (point := feature_from_point(item, index, local_inherited))
+                    ]
                     if len(route_points) >= 2:
                         candidates.append(route_points)
                 coordinates = obj.get("coordinates")
                 if isinstance(coordinates, list):
-                    named_points = [point for index, item in enumerate(coordinates, start=1) if (point := feature_from_point(item, index))]
+                    named_points = [
+                        point
+                        for index, item in enumerate(coordinates, start=1)
+                        if (point := feature_from_point(item, index, local_inherited))
+                    ]
                     if len(named_points) >= 2:
                         candidates.append(named_points)
                     else:
-                        add_line(coordinates)
+                        add_line(coordinates, local_inherited)
                 for value in obj.values():
-                    visit(value)
+                    visit(value, local_inherited)
             elif isinstance(obj, list):
-                route_points = [point for index, item in enumerate(obj, start=1) if (point := feature_from_point(item, index))]
+                route_points = [
+                    point
+                    for index, item in enumerate(obj, start=1)
+                    if (point := feature_from_point(item, index, inherited))
+                ]
                 if len(route_points) >= 2:
                     candidates.append(route_points)
                 else:
-                    add_line(obj)
+                    add_line(obj, inherited)
                     for item in obj:
-                        visit(item)
+                        visit(item, inherited)
 
         def route_candidate_score(points: List[Dict[str, Any]]) -> Tuple[int, int, int]:
             rpm_count = 0
