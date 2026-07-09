@@ -45,12 +45,16 @@ Use the `RTZ Batch` tab to run ABB-style continuous RTZ batch tests for:
 
 - `POST /v1/find-shortest-voyage`
 - `POST /v1/find-optimal-voyage`
+- `POST /v2/calculate-voyage-plan`
 
 Select a planned RTZ, a folder of reference optimal RTZ files, and an output folder. The app uses
 each reference optimal RTZ's first waypoint as the current position, cuts the remaining planned
 route from that point, then sends a NAPA voyage request using the first/last remaining waypoints as
-`fromCoordinates` and `toCoordinates`. It saves `.request.json`, `.accepted.json`,
-`.response.json`, and a result `.rtz` when route geometry is returned.
+`fromCoordinates` and `toCoordinates` for v1 requests, or all remaining waypoints as `coordinates`
+for `calculate-voyage-plan`. The calculate voyage batch request automatically sets
+`operationProfile` to `OptimalSpeed` and `maxCalculationIntervalDistance` to `92600` meters
+(`50 * 1852`). It saves `.request.json`, `.accepted.json`, `.response.json`, and a result `.rtz`
+when route geometry is returned.
 
 Optional local defaults:
 
