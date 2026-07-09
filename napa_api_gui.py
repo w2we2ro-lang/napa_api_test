@@ -141,7 +141,7 @@ PROJECT_CALCULATE_VOYAGE_EXAMPLE = {
     ],
     "startTime": "2026-07-09T00:00:00Z",
     "draft": 14,
-    "operationMethod": {"speedOverGround": 7},
+    "operationMethod": {"arrivalTime": "2026-07-09T19:48:06Z"},
     "operationProfile": CALCULATE_VOYAGE_OPERATION_PROFILE,
     "maxCalculationIntervalDistance": CALCULATE_VOYAGE_MAX_INTERVAL_DISTANCE_METERS,
     "constraints": {
@@ -1780,6 +1780,8 @@ class RtzBatchFrame(ttk.Frame, LogMixin):
             planned_points, planned_schedule = self._parse_rtz(planned_path)
             if len(planned_points) < 2:
                 raise ValueError("Planned RTZ must contain at least two waypoints.")
+            if endpoint_name == CALCULATE_VOYAGE_BATCH_ENDPOINT and not planned_schedule.get("eta"):
+                raise ValueError("Calculate voyage batch requires ETA on the planned RTZ's last waypoint.")
             if planned_schedule.get("eta"):
                 self.log(f"Batch planned route ETA: {planned_schedule['eta']}")
 
@@ -1965,11 +1967,11 @@ class RtzBatchFrame(ttk.Frame, LogMixin):
             metadata.get("timestamp_iso") or schedule.get("etd") or payload.get("startTime")
         )
 
-        speeds = [float(value) for value in schedule.get("speeds", []) if isinstance(value, (int, float))]
-        if speeds:
-            operation_method = payload.setdefault("operationMethod", {})
-            if isinstance(operation_method, dict):
-                operation_method["speedOverGround"] = round(sum(speeds) / len(speeds), 1)
+        existing_operation_method = payload.get("operationMethod") if isinstance(payload.get("operationMethod"), dict) else {}
+        arrival_time = schedule.get("eta") or existing_operation_method.get("arrivalTime")
+        if not arrival_time:
+            raise ValueError("Calculate voyage batch requires ETA on the planned RTZ's last waypoint.")
+        payload["operationMethod"] = {"arrivalTime": _future_or_existing_start_time(arrival_time)}
 
         payload["operationProfile"] = CALCULATE_VOYAGE_OPERATION_PROFILE
         payload["maxCalculationIntervalDistance"] = CALCULATE_VOYAGE_MAX_INTERVAL_DISTANCE_METERS
