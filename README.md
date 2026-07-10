@@ -73,7 +73,8 @@ Default RTZ batch paths:
 Use the `Result Preview` tab to inspect RTZ batch outputs. Add one or more result RTZ folders,
 then click `Generate Profiles` to render ABB-style speed and RPM profile charts from timestamped
 RTZ files. The tab auto-adds the active RTZ Batch output folder while a batch is running and can
-export the generated profile intervals to CSV.
+export the generated profile data to a time-series CSV with `time_utc`, `end_utc`, `speed_kn`,
+and `rpm` columns.
 
 Optional local defaults:
 
