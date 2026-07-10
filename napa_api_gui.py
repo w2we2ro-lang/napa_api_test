@@ -2676,6 +2676,7 @@ class ResultPreviewFrame(ttk.Frame, LogMixin):
         self.speed_intervals: List[Dict[str, Any]] = []
         self.rpm_intervals: List[Dict[str, Any]] = []
         self.profile_series: List[Dict[str, Any]] = []
+        self.profile_export_rows: List[Dict[str, Any]] = []
         self.profile_worker_running = False
         self.auto_profile_refresh_active = False
         self._init_log_queue()
@@ -2702,7 +2703,7 @@ class ResultPreviewFrame(ttk.Frame, LogMixin):
             row=3, column=1, sticky="w", padx=5, pady=5
         )
         ttk.Button(controls, text="Generate Profiles", command=self.generate_profiles).grid(row=3, column=1, sticky="e", padx=5, pady=5)
-        ttk.Button(controls, text="Save CSV", command=self.save_profiles_csv).grid(row=3, column=2, padx=5, pady=5)
+        ttk.Button(controls, text="Save Time CSV", command=self.save_profiles_csv).grid(row=3, column=2, padx=5, pady=5)
         controls.columnconfigure(1, weight=1)
 
         charts = ttk.PanedWindow(self, orient=tk.VERTICAL)
@@ -2898,6 +2899,7 @@ class ResultPreviewFrame(ttk.Frame, LogMixin):
         self.profile_series = profile_series
         self.speed_intervals = [item for series in profile_series for item in series["speed_intervals"]]
         self.rpm_intervals = [item for series in profile_series for item in series["rpm_intervals"]]
+        self.profile_export_rows = self._build_profile_export_rows(profile_series)
         self.speed_canvas.set_series(
             [
                 {"label": series["label"], "color": series["color"], "intervals": series["speed_intervals"]}
@@ -2913,7 +2915,8 @@ class ResultPreviewFrame(ttk.Frame, LogMixin):
         total_records = sum(len(series["records"]) for series in profile_series)
         self.log(
             f"Generated profiles from {len(profile_series)} result series and {total_records} RTZ files: "
-            f"{len(self.speed_intervals)} speed intervals, {len(self.rpm_intervals)} rpm intervals."
+            f"{len(self.speed_intervals)} speed intervals, {len(self.rpm_intervals)} rpm intervals, "
+            f"{len(self.profile_export_rows)} export rows."
         )
         for series in profile_series:
             self.log(
@@ -2927,12 +2930,84 @@ class ResultPreviewFrame(ttk.Frame, LogMixin):
             rpms = [float(item["value"]) for item in self.rpm_intervals]
             self.log(f"RPM min/avg/max: {min(rpms):.2f}/{sum(rpms) / len(rpms):.2f}/{max(rpms):.2f}")
 
+    def _build_profile_export_rows(self, profile_series: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+        for series in profile_series:
+            speed_intervals = sorted(series["speed_intervals"], key=lambda item: (item["start"], item["end"]))
+            rpm_intervals = sorted(series["rpm_intervals"], key=lambda item: (item["start"], item["end"]))
+            boundaries = sorted(
+                {
+                    boundary
+                    for interval in [*speed_intervals, *rpm_intervals]
+                    for boundary in (interval.get("start"), interval.get("end"))
+                    if isinstance(boundary, datetime)
+                }
+            )
+            for index in range(len(boundaries) - 1):
+                start = boundaries[index]
+                end = boundaries[index + 1]
+                if end <= start:
+                    continue
+                speed_item = self._profile_interval_for_span(speed_intervals, start, end)
+                rpm_item = self._profile_interval_for_span(rpm_intervals, start, end)
+                if speed_item is None and rpm_item is None:
+                    continue
+                rows.append(
+                    {
+                        "series": series.get("label", ""),
+                        "kind": series.get("kind", ""),
+                        "folder": series.get("folder", ""),
+                        "start": start,
+                        "end": end,
+                        "duration_seconds": (end - start).total_seconds(),
+                        "speed_kn": speed_item.get("value") if speed_item else None,
+                        "rpm": rpm_item.get("value") if rpm_item else None,
+                        "speed_source": speed_item.get("source", "") if speed_item else "",
+                        "rpm_source": rpm_item.get("source", "") if rpm_item else "",
+                        "speed_leg_index": speed_item.get("leg_index", "") if speed_item else "",
+                        "rpm_leg_index": rpm_item.get("leg_index", "") if rpm_item else "",
+                        "speed_distance_nm": self._profile_interval_distance(speed_item, start, end),
+                        "rpm_distance_nm": self._profile_interval_distance(rpm_item, start, end),
+                    }
+                )
+        return sorted(rows, key=lambda row: (str(row.get("series", "")), row["start"], row["end"]))
+
+    def _profile_interval_for_span(
+        self,
+        intervals: List[Dict[str, Any]],
+        start: datetime,
+        end: datetime,
+    ) -> Optional[Dict[str, Any]]:
+        for interval in intervals:
+            interval_start = interval.get("start")
+            interval_end = interval.get("end")
+            if not isinstance(interval_start, datetime) or not isinstance(interval_end, datetime):
+                continue
+            if interval_start <= start and interval_end >= end:
+                return interval
+        return None
+
+    def _profile_interval_distance(self, interval: Optional[Dict[str, Any]], start: datetime, end: datetime) -> Any:
+        if interval is None or not isinstance(interval.get("distance_nm"), (int, float)):
+            return ""
+        interval_start = interval.get("start")
+        interval_end = interval.get("end")
+        if not isinstance(interval_start, datetime) or not isinstance(interval_end, datetime):
+            return interval.get("distance_nm")
+        interval_seconds = max(0.0, (interval_end - interval_start).total_seconds())
+        if interval_seconds <= 0:
+            return interval.get("distance_nm")
+        overlap_start = max(start, interval_start)
+        overlap_end = min(end, interval_end)
+        overlap_seconds = max(0.0, (overlap_end - overlap_start).total_seconds())
+        return float(interval["distance_nm"]) * min(1.0, overlap_seconds / interval_seconds)
+
     def save_profiles_csv(self) -> None:
-        if not self.speed_intervals and not self.rpm_intervals:
+        if not self.profile_export_rows:
             messagebox.showinfo("Result Preview", "Generate profiles before saving CSV.")
             return
         path = filedialog.asksaveasfilename(
-            title="Save Profile CSV",
+            title="Save Profile Time CSV",
             defaultextension=".csv",
             filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
         )
@@ -2940,25 +3015,47 @@ class ResultPreviewFrame(ttk.Frame, LogMixin):
             return
         with open(path, "w", newline="", encoding="utf-8") as handle:
             writer = csv.writer(handle)
-            writer.writerow(["profile", "series", "kind", "folder", "start_utc", "end_utc", "value", "source_file", "leg_index", "distance_nm"])
-            for series in self.profile_series:
-                for profile_name, intervals in (("speed", series["speed_intervals"]), ("rpm", series["rpm_intervals"])):
-                    for item in intervals:
-                        writer.writerow(
-                            [
-                                profile_name,
-                                item.get("series", series.get("label", "")),
-                                item.get("kind", series.get("kind", "")),
-                                item.get("folder", series.get("folder", "")),
-                                _utc_z(item["start"]),
-                                _utc_z(item["end"]),
-                                self._fmt_float(float(item["value"])),
-                                item.get("source", ""),
-                                item.get("leg_index", ""),
-                                self._fmt_float(float(item.get("distance_nm", 0))),
-                            ]
-                        )
-        self.log(f"Profile CSV saved: {path}")
+            writer.writerow(
+                [
+                    "series",
+                    "kind",
+                    "folder",
+                    "time_utc",
+                    "end_utc",
+                    "duration_seconds",
+                    "speed_kn",
+                    "rpm",
+                    "speed_source_file",
+                    "rpm_source_file",
+                    "speed_leg_index",
+                    "rpm_leg_index",
+                    "speed_distance_nm",
+                    "rpm_distance_nm",
+                ]
+            )
+            for item in self.profile_export_rows:
+                writer.writerow(
+                    [
+                        item.get("series", ""),
+                        item.get("kind", ""),
+                        item.get("folder", ""),
+                        _utc_z(item["start"]),
+                        _utc_z(item["end"]),
+                        self._csv_number(item.get("duration_seconds")),
+                        self._csv_number(item.get("speed_kn")),
+                        self._csv_number(item.get("rpm")),
+                        item.get("speed_source", ""),
+                        item.get("rpm_source", ""),
+                        item.get("speed_leg_index", ""),
+                        item.get("rpm_leg_index", ""),
+                        self._csv_number(item.get("speed_distance_nm")),
+                        self._csv_number(item.get("rpm_distance_nm")),
+                    ]
+                )
+        self.log(f"Profile time CSV saved: {path}")
+
+    def _csv_number(self, value: Any) -> str:
+        return self._fmt_float(float(value)) if isinstance(value, (int, float)) else ""
 
     def _profile_limit(self) -> int:
         try:
