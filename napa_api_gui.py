@@ -48,7 +48,6 @@ DEFAULT_BASE_URL = "https://api.fleetintelligence.napa.fi/vo"
 DEFAULT_SWAGGER_URL = "https://api.fleetintelligence.napa.fi/vo/v1/swagger.json"
 DEFAULT_TIMEOUT_SECONDS = 60
 POLL_INTERVAL_SECONDS = 3
-POLL_MAX_ATTEMPTS = 40
 EARTH_TEXTURE_URL = (
     "https://assets.science.nasa.gov/content/dam/science/esd/eo/images/bmng/"
     "bmng-base/january/world.200401.3x5400x2700.jpg"
@@ -918,8 +917,7 @@ class NapaApiFrame(ttk.Frame, LogMixin):
 
     def _location_worker(self, kwargs: Dict[str, Any], poll: bool) -> None:
         base_url = kwargs.pop("_base_url")
-        max_attempts = POLL_MAX_ATTEMPTS if poll else 1
-        for attempt in range(1, max_attempts + 1):
+        while True:
             started = time.time()
             try:
                 response = require_requests().request(**kwargs)
@@ -927,15 +925,14 @@ class NapaApiFrame(ttk.Frame, LogMixin):
                 self.log(f"ERROR: {exc}")
                 return
             elapsed = time.time() - started
-            self.log(f"Location attempt {attempt}/{max_attempts}")
-            self._handle_response(response, elapsed, base_url)
             parsed, _body_text = _response_body_text(response)
-            if not poll or response.status_code >= 400:
+
+            is_done = parsed is not None and self._is_async_done(parsed)
+            unexpected_empty_response = parsed is None and response.status_code != 202
+            if not poll or response.status_code >= 400 or is_done or unexpected_empty_response:
+                self._handle_response(response, elapsed, base_url)
                 return
-            if parsed is not None and self._is_async_done(parsed):
-                return
-            if parsed is None and response.status_code != 202:
-                return
+
             time.sleep(POLL_INTERVAL_SECONDS)
 
     def _is_async_done(self, data: Any) -> bool:
@@ -2147,7 +2144,9 @@ class RtzBatchFrame(ttk.Frame, LogMixin):
         timeout: int,
         accepted_data: Dict[str, Any],
     ) -> Any:
-        for attempt in range(1, POLL_MAX_ATTEMPTS + 1):
+        attempt = 0
+        while True:
+            attempt += 1
             if self.batch_stop_event.is_set():
                 raise RuntimeError("RTZ batch stopped during polling.")
             started = time.time()
@@ -2155,16 +2154,15 @@ class RtzBatchFrame(ttk.Frame, LogMixin):
             snapshot = self._response_snapshot(response, time.time() - started)
             snapshot["attempt"] = attempt
             accepted_data["polls"].append(snapshot)
-            self.log(f"Location attempt {attempt}/{POLL_MAX_ATTEMPTS}: HTTP {response.status_code}")
+            if response.status_code >= 400:
+                self.log(f"Location poll attempt {attempt}: HTTP {response.status_code}")
             self._raise_for_http_response(response, "Batch Location poll")
             parsed, _body_text = _response_body_text(response)
             if parsed is not None and self._is_async_done(parsed):
                 return parsed
             if parsed is None and response.status_code != 202:
                 return snapshot
-            if attempt < POLL_MAX_ATTEMPTS:
-                time.sleep(POLL_INTERVAL_SECONDS)
-        raise TimeoutError(f"Location polling did not complete after {POLL_MAX_ATTEMPTS} attempts: {location}")
+            time.sleep(POLL_INTERVAL_SECONDS)
 
     def _response_snapshot(self, response: requests.Response, elapsed: float) -> Dict[str, Any]:
         parsed, body_text = _response_body_text(response)
