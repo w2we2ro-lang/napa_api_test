@@ -57,10 +57,10 @@ route from that point, then sends a NAPA voyage request using the first/last rem
 `fromCoordinates` and `toCoordinates` for v1 requests, or all remaining waypoints as `coordinates`
 for `calculate-voyage`. The calculate voyage batch request automatically sets `startTime`,
 uses the planned RTZ's last waypoint ETA as `operationMethod.arrivalTime`, sets `operationProfile`
-to `OptimalSpeed`, and sets `maxCalculationIntervalDistance` to `92600` meters (`50 * 1852`). It
-saves `.request.json`, `.accepted.json`, `.response.json`, and a result `.rtz` when route geometry
-is returned. NAPA response `speedOverGround` values are converted from `m/s` to knots before being
-written as RTZ `speed` values.
+to `OptimalSpeed`, and uses the selected `maxCalculationIntervalDistance` value. The default is
+`92600` meters (`50 * 1852`). It saves `.request.json`, `.accepted.json`, `.response.json`, and a
+result `.rtz` when route geometry is returned. NAPA response `speedOverGround` values are converted
+from `m/s` to knots before being written as RTZ `speed` values.
 
 Default RTZ batch paths:
 

@@ -1690,6 +1690,7 @@ class RtzBatchFrame(ttk.Frame, LogMixin):
         self.batch_output_dir_var = tk.StringVar(value=str(DEFAULT_BATCH_OUTPUT_DIR))
         self.batch_endpoint_var = tk.StringVar(value="Find optimal voyage")
         self.batch_limit_var = tk.StringVar(value="0")
+        self.batch_max_interval_var = tk.StringVar(value=str(CALCULATE_VOYAGE_MAX_INTERVAL_DISTANCE_METERS))
 
         ttk.Label(batch_frame, text="Planned RTZ").grid(row=0, column=0, sticky="w", padx=5, pady=3)
         ttk.Entry(batch_frame, textvariable=self.batch_planned_path_var).grid(row=0, column=1, sticky="we", padx=5, pady=3)
@@ -1712,15 +1713,26 @@ class RtzBatchFrame(ttk.Frame, LogMixin):
             width=28,
         )
         endpoint_box.grid(row=3, column=1, sticky="w", padx=5, pady=3)
-        endpoint_box.bind("<<ComboboxSelected>>", lambda _event: self.load_batch_sample())
+        endpoint_box.bind("<<ComboboxSelected>>", lambda _event: self._on_batch_endpoint_changed())
 
-        ttk.Label(batch_frame, text="Max files (0 = all)").grid(row=4, column=0, sticky="w", padx=5, pady=3)
-        ttk.Spinbox(batch_frame, textvariable=self.batch_limit_var, from_=0, to=10000, increment=1, width=10).grid(
-            row=4, column=1, sticky="w", padx=5, pady=3
+        ttk.Label(batch_frame, text="Max interval distance (m)").grid(row=4, column=0, sticky="w", padx=5, pady=3)
+        self.batch_max_interval_spinbox = ttk.Spinbox(
+            batch_frame,
+            textvariable=self.batch_max_interval_var,
+            from_=5000,
+            to=1000000,
+            increment=1852,
+            width=12,
         )
-        ttk.Button(batch_frame, text="Load Sample", command=self.load_batch_sample).grid(row=4, column=1, sticky="e", padx=5, pady=3)
-        ttk.Button(batch_frame, text="Start Batch", command=self.start_rtz_batch).grid(row=4, column=2, padx=5, pady=3)
-        ttk.Button(batch_frame, text="Stop", command=self.stop_rtz_batch).grid(row=4, column=3, padx=5, pady=3)
+        self.batch_max_interval_spinbox.grid(row=4, column=1, sticky="w", padx=5, pady=3)
+
+        ttk.Label(batch_frame, text="Max files (0 = all)").grid(row=5, column=0, sticky="w", padx=5, pady=3)
+        ttk.Spinbox(batch_frame, textvariable=self.batch_limit_var, from_=0, to=10000, increment=1, width=10).grid(
+            row=5, column=1, sticky="w", padx=5, pady=3
+        )
+        ttk.Button(batch_frame, text="Load Sample", command=self.load_batch_sample).grid(row=5, column=1, sticky="e", padx=5, pady=3)
+        ttk.Button(batch_frame, text="Start Batch", command=self.start_rtz_batch).grid(row=5, column=2, padx=5, pady=3)
+        ttk.Button(batch_frame, text="Stop", command=self.stop_rtz_batch).grid(row=5, column=3, padx=5, pady=3)
         batch_frame.columnconfigure(1, weight=1)
 
         main = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
@@ -1737,6 +1749,7 @@ class RtzBatchFrame(ttk.Frame, LogMixin):
         self.log_text = scrolledtext.ScrolledText(log_frame, wrap=tk.NONE)
         self.log_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
         self.load_batch_sample()
+        self._update_calculate_options_state()
 
     def _root_app(self) -> "NapaApiGui":
         return self.winfo_toplevel()  # type: ignore[return-value]
@@ -1767,8 +1780,18 @@ class RtzBatchFrame(ttk.Frame, LogMixin):
             if endpoint.path == endpoint_path and isinstance(endpoint.example, dict):
                 sample = json.loads(json.dumps(endpoint.example))
                 break
+        if self.batch_endpoint_var.get().strip() == CALCULATE_VOYAGE_BATCH_ENDPOINT:
+            sample["maxCalculationIntervalDistance"] = self._calculate_voyage_max_interval_distance()
         self.request_text.delete("1.0", tk.END)
         self.request_text.insert("1.0", json_preview(sample or {}))
+
+    def _on_batch_endpoint_changed(self) -> None:
+        self.load_batch_sample()
+        self._update_calculate_options_state()
+
+    def _update_calculate_options_state(self) -> None:
+        state = "normal" if self.batch_endpoint_var.get().strip() == CALCULATE_VOYAGE_BATCH_ENDPOINT else "disabled"
+        self.batch_max_interval_spinbox.configure(state=state)
 
     def start_rtz_batch(self) -> None:
         if self.batch_running:
@@ -1795,6 +1818,11 @@ class RtzBatchFrame(ttk.Frame, LogMixin):
         template = json.loads(raw_request) if raw_request else {}
         if not isinstance(template, dict):
             raise ValueError("Base Request JSON must be an object.")
+        max_interval_distance = (
+            self._calculate_voyage_max_interval_distance()
+            if endpoint_name == CALCULATE_VOYAGE_BATCH_ENDPOINT
+            else None
+        )
         return {
             "endpoint_name": endpoint_name,
             "endpoint_path": BATCH_ENDPOINTS[endpoint_name],
@@ -1805,6 +1833,7 @@ class RtzBatchFrame(ttk.Frame, LogMixin):
             "optimal_dir": self.batch_optimal_dir_var.get().strip(),
             "output_dir": self.batch_output_dir_var.get().strip(),
             "limit": self._batch_limit(),
+            "max_calculation_interval_distance": max_interval_distance,
             "template": template,
         }
 
@@ -1868,7 +1897,14 @@ class RtzBatchFrame(ttk.Frame, LogMixin):
                 if self._resume_batch_output_if_possible(output_path, response_path):
                     continue
 
-                payload = self._build_batch_payload(endpoint_name, entry["points"], entry["schedule"], metadata, settings["template"])
+                payload = self._build_batch_payload(
+                    endpoint_name,
+                    entry["points"],
+                    entry["schedule"],
+                    metadata,
+                    settings["template"],
+                    settings.get("max_calculation_interval_distance"),
+                )
                 self._write_batch_json(request_path, payload)
                 self._run_batch_request_with_retries(
                     settings,
@@ -1895,6 +1931,15 @@ class RtzBatchFrame(ttk.Frame, LogMixin):
         except ValueError:
             return 0
         return max(0, value)
+
+    def _calculate_voyage_max_interval_distance(self) -> float:
+        try:
+            value = float(self.batch_max_interval_var.get().strip())
+        except ValueError as exc:
+            raise ValueError("Max interval distance must be a number in meters.") from exc
+        if value < 5000:
+            raise ValueError("Max interval distance must be at least 5000 meters.")
+        return int(value) if value.is_integer() else value
 
     def _parse_rtz(self, path: Path) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         root = ET.parse(path).getroot()
@@ -1972,10 +2017,11 @@ class RtzBatchFrame(ttk.Frame, LogMixin):
         schedule: Dict[str, Any],
         metadata: Dict[str, Any],
         template: Dict[str, Any],
+        max_calculation_interval_distance: Optional[float] = None,
     ) -> Dict[str, Any]:
         payload = json.loads(json.dumps(template))
         if endpoint_name == CALCULATE_VOYAGE_BATCH_ENDPOINT:
-            return self._build_calculate_voyage_payload(points, schedule, metadata, payload)
+            return self._build_calculate_voyage_payload(points, schedule, metadata, payload, max_calculation_interval_distance)
 
         start_lat, start_lon = self._feature_lat_lng(points[0])
         end_lat, end_lon = self._feature_lat_lng(points[-1])
@@ -2001,6 +2047,7 @@ class RtzBatchFrame(ttk.Frame, LogMixin):
         schedule: Dict[str, Any],
         metadata: Dict[str, Any],
         payload: Dict[str, Any],
+        max_calculation_interval_distance: Optional[float] = None,
     ) -> Dict[str, Any]:
         payload.pop("fromCoordinates", None)
         payload.pop("toCoordinates", None)
@@ -2018,7 +2065,11 @@ class RtzBatchFrame(ttk.Frame, LogMixin):
         payload["operationMethod"] = {"arrivalTime": _future_or_existing_start_time(arrival_time)}
 
         payload["operationProfile"] = CALCULATE_VOYAGE_OPERATION_PROFILE
-        payload["maxCalculationIntervalDistance"] = CALCULATE_VOYAGE_MAX_INTERVAL_DISTANCE_METERS
+        payload["maxCalculationIntervalDistance"] = (
+            CALCULATE_VOYAGE_MAX_INTERVAL_DISTANCE_METERS
+            if max_calculation_interval_distance is None
+            else max_calculation_interval_distance
+        )
         if metadata.get("imo"):
             payload["imoNumber"] = int(metadata["imo"])
         return payload
